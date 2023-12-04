@@ -12,10 +12,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
+	"github.com/syncthing/syncthing/lib/build"
 	"github.com/syncthing/syncthing/lib/config"
 	"github.com/syncthing/syncthing/lib/fs"
 
@@ -35,13 +35,13 @@ type external struct {
 func newExternal(cfg config.FolderConfiguration) Versioner {
 	command := cfg.Versioning.Params["command"]
 
-	if runtime.GOOS == "windows" {
+	if build.IsWindows {
 		command = strings.ReplaceAll(command, `\`, `\\`)
 	}
 
 	s := external{
 		command:    command,
-		filesystem: cfg.Filesystem(),
+		filesystem: cfg.Filesystem(nil),
 	}
 
 	l.Debugf("instantiated %#v", s)
@@ -90,7 +90,8 @@ func (v external) Archive(filePath string) error {
 	cmd := exec.Command(words[0], words[1:]...)
 	env := os.Environ()
 	// filter STGUIAUTH and STGUIAPIKEY from environment variables
-	filteredEnv := []string{}
+	var filteredEnv []string
+
 	for _, x := range env {
 		if !strings.HasPrefix(x, "STGUIAUTH=") && !strings.HasPrefix(x, "STGUIAPIKEY=") {
 			filteredEnv = append(filteredEnv, x)
@@ -113,14 +114,14 @@ func (v external) Archive(filePath string) error {
 	return errors.New("file was not removed by external script")
 }
 
-func (v external) GetVersions() (map[string][]FileVersion, error) {
+func (external) GetVersions() (map[string][]FileVersion, error) {
 	return nil, ErrRestorationNotSupported
 }
 
-func (v external) Restore(filePath string, versionTime time.Time) error {
+func (external) Restore(_ string, _ time.Time) error {
 	return ErrRestorationNotSupported
 }
 
-func (v external) Clean(_ context.Context) error {
+func (external) Clean(_ context.Context) error {
 	return nil
 }

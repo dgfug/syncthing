@@ -13,16 +13,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 
+	"github.com/alecthomas/kong"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/syncthing/syncthing/lib/sha256"
 	"github.com/syncthing/syncthing/lib/ur"
 
@@ -31,34 +32,66 @@ import (
 
 const maxRequestSize = 1 << 20 // 1 MiB
 
+type cli struct {
+	Dir           string `help:"Parent directory to store crash and failure reports in" env:"REPORTS_DIR" default:"."`
+	DSN           string `help:"Sentry DSN" env:"SENTRY_DSN"`
+	Listen        string `help:"HTTP listen address" default:":8080" env:"LISTEN_ADDRESS"`
+	MaxDiskFiles  int    `help:"Maximum number of reports on disk" default:"100000" env:"MAX_DISK_FILES"`
+	MaxDiskSizeMB int64  `help:"Maximum disk space to use for reports" default:"1024" env:"MAX_DISK_SIZE_MB"`
+	SentryQueue   int    `help:"Maximum number of reports to queue for sending to Sentry" default:"64" env:"SENTRY_QUEUE"`
+	DiskQueue     int    `help:"Maximum number of reports to queue for writing to disk" default:"64" env:"DISK_QUEUE"`
+}
+
 func main() {
-	dir := flag.String("dir", ".", "Parent directory to store crash and failure reports in")
-	dsn := flag.String("dsn", "", "Sentry DSN")
-	listen := flag.String("listen", ":22039", "HTTP listen address")
-	flag.Parse()
+	var params cli
+	kong.Parse(&params)
 
 	mux := http.NewServeMux()
 
-	cr := &crashReceiver{
-		dir: filepath.Join(*dir, "crash_reports"),
-		dsn: *dsn,
+	ds := &diskStore{
+		dir:      filepath.Join(params.Dir, "crash_reports"),
+		inbox:    make(chan diskEntry, params.DiskQueue),
+		maxFiles: params.MaxDiskFiles,
+		maxBytes: params.MaxDiskSizeMB << 20,
 	}
-	mux.Handle("/", cr)
+	go ds.Serve(context.Background())
 
-	if *dsn != "" {
-		mux.HandleFunc("/newcrash/failure", handleFailureFn(*dsn, filepath.Join(*dir, "failure_reports")))
+	ss := &sentryService{
+		dsn:   params.DSN,
+		inbox: make(chan sentryRequest, params.SentryQueue),
+	}
+	go ss.Serve(context.Background())
+
+	cr := &crashReceiver{
+		store:  ds,
+		sentry: ss,
+	}
+
+	mux.Handle("/", cr)
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, req *http.Request) {
+		w.Write([]byte("OK"))
+	})
+	mux.Handle("/metrics", promhttp.Handler())
+
+	if params.DSN != "" {
+		mux.HandleFunc("/newcrash/failure", handleFailureFn(params.DSN, filepath.Join(params.Dir, "failure_reports")))
 	}
 
 	log.SetOutput(os.Stdout)
-	if err := http.ListenAndServe(*listen, mux); err != nil {
+	if err := http.ListenAndServe(params.Listen, mux); err != nil {
 		log.Fatalln("HTTP serve:", err)
 	}
 }
 
 func handleFailureFn(dsn, failureDir string) func(w http.ResponseWriter, req *http.Request) {
 	return func(w http.ResponseWriter, req *http.Request) {
+		result := "failure"
+		defer func() {
+			metricFailureReportsTotal.WithLabelValues(result).Inc()
+		}()
+
 		lr := io.LimitReader(req.Body, maxRequestSize)
-		bs, err := ioutil.ReadAll(lr)
+		bs, err := io.ReadAll(lr)
 		req.Body.Close()
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -91,7 +124,7 @@ func handleFailureFn(dsn, failureDir string) func(w http.ResponseWriter, req *ht
 			for k, v := range r.Extra {
 				pkt.Extra[k] = v
 			}
-			if len(r.Goroutines) != 0 {
+			if r.Goroutines != "" {
 				url, err := saveFailureWithGoroutines(r.FailureData, failureDir)
 				if err != nil {
 					log.Println("Saving failure report:", err)
@@ -107,6 +140,7 @@ func handleFailureFn(dsn, failureDir string) func(w http.ResponseWriter, req *ht
 				log.Println("Failed to send failure report:", err)
 			} else {
 				log.Println("Sent failure report:", r.Description)
+				result = "success"
 			}
 		}
 	}

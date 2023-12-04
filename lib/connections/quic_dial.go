@@ -12,12 +12,12 @@ package connections
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/url"
 	"time"
 
-	"github.com/lucas-clemente/quic-go"
-	"github.com/pkg/errors"
+	"github.com/quic-go/quic-go"
 
 	"github.com/syncthing/syncthing/lib/config"
 	"github.com/syncthing/syncthing/lib/connections/registry"
@@ -25,8 +25,6 @@ import (
 )
 
 const (
-	quicPriority = 100
-
 	// The timeout for connecting, accepting and creating the various
 	// streams.
 	quicOperationTimeout = 10 * time.Second
@@ -41,6 +39,7 @@ func init() {
 
 type quicDialer struct {
 	commonDialer
+	registry *registry.Registry
 }
 
 func (d *quicDialer) Dial(ctx context.Context, _ protocol.DeviceID, uri *url.URL) (internalConn, error) {
@@ -53,32 +52,28 @@ func (d *quicDialer) Dial(ctx context.Context, _ protocol.DeviceID, uri *url.URL
 		return internalConn{}, err
 	}
 
-	var conn net.PacketConn
-	// We need to track who created the conn.
-	// Given we always pass the connection to quic, it assumes it's a remote connection it never closes it,
-	// So our wrapper around it needs to close it, but it only needs to close it if it's not the listening connection.
+	// If we created the conn we need to close it at the end. If we got a
+	// Transport from the registry we have no conn to close.
 	var createdConn net.PacketConn
-	listenConn := registry.Get(uri.Scheme, packetConnUnspecified)
-	if listenConn != nil {
-		conn = listenConn.(net.PacketConn)
-	} else {
+	transport, _ := d.registry.Get(uri.Scheme, transportConnUnspecified).(*quic.Transport)
+	if transport == nil {
 		if packetConn, err := net.ListenPacket("udp", ":0"); err != nil {
 			return internalConn{}, err
 		} else {
-			conn = packetConn
 			createdConn = packetConn
+			transport = &quic.Transport{Conn: packetConn}
 		}
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, quicOperationTimeout)
 	defer cancel()
 
-	session, err := quic.DialContext(ctx, conn, addr, uri.Host, d.tlsCfg, quicConfig)
+	session, err := transport.Dial(ctx, addr, d.tlsCfg, quicConfig)
 	if err != nil {
 		if createdConn != nil {
 			_ = createdConn.Close()
 		}
-		return internalConn{}, errors.Wrap(err, "dial")
+		return internalConn{}, fmt.Errorf("dial: %w", err)
 	}
 
 	stream, err := session.OpenStreamSync(ctx)
@@ -88,15 +83,21 @@ func (d *quicDialer) Dial(ctx context.Context, _ protocol.DeviceID, uri *url.URL
 		if createdConn != nil {
 			_ = createdConn.Close()
 		}
-		return internalConn{}, errors.Wrap(err, "open stream")
+		return internalConn{}, fmt.Errorf("open stream: %w", err)
 	}
 
-	return newInternalConn(&quicTlsConn{session, stream, createdConn}, connTypeQUICClient, quicPriority), nil
+	priority := d.wanPriority
+	isLocal := d.lanChecker.isLAN(session.RemoteAddr())
+	if isLocal {
+		priority = d.lanPriority
+	}
+
+	return newInternalConn(&quicTlsConn{session, stream, createdConn}, connTypeQUICClient, isLocal, priority), nil
 }
 
 type quicDialerFactory struct{}
 
-func (quicDialerFactory) New(opts config.OptionsConfiguration, tlsCfg *tls.Config) genericDialer {
+func (quicDialerFactory) New(opts config.OptionsConfiguration, tlsCfg *tls.Config, registry *registry.Registry, lanChecker *lanChecker) genericDialer {
 	// So the idea is that we should probably try dialing every 20 seconds.
 	// However it would still be nice if this was adjustable/proportional to ReconnectIntervalS
 	// But prevent something silly like 1/3 = 0 etc.
@@ -104,14 +105,17 @@ func (quicDialerFactory) New(opts config.OptionsConfiguration, tlsCfg *tls.Confi
 	if quicInterval < 10 {
 		quicInterval = 10
 	}
-	return &quicDialer{commonDialer{
-		reconnectInterval: time.Duration(quicInterval) * time.Second,
-		tlsCfg:            tlsCfg,
-	}}
-}
-
-func (quicDialerFactory) Priority() int {
-	return quicPriority
+	return &quicDialer{
+		commonDialer: commonDialer{
+			reconnectInterval: time.Duration(quicInterval) * time.Second,
+			tlsCfg:            tlsCfg,
+			lanChecker:        lanChecker,
+			lanPriority:       opts.ConnectionPriorityQUICLAN,
+			wanPriority:       opts.ConnectionPriorityQUICWAN,
+			allowsMultiConns:  true,
+		},
+		registry: registry,
+	}
 }
 
 func (quicDialerFactory) AlwaysWAN() bool {

@@ -27,7 +27,7 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
-.TH "SYNCTHING-STIGNORE" "5" "Sep 26, 2021" "v1" "Syncthing"
+.TH "SYNCTHING-STIGNORE" "5" "Dec 01, 2023" "v1.26.0" "Syncthing"
 .SH NAME
 syncthing-stignore \- Prevent files from being synchronized to other nodes
 .SH SYNOPSIS
@@ -44,12 +44,12 @@ syncthing-stignore \- Prevent files from being synchronized to other nodes
 .SH DESCRIPTION
 .sp
 If some files should not be synchronized to (or from) other devices, a file called
-\fB\&.stignore\fP can be created containing file patterns to ignore. The
-\fB\&.stignore\fP file must be placed in the root of the folder. The
-\fB\&.stignore\fP file itself will never be synced to other devices, although it can
-\fB#include\fP files that \fIare\fP synchronized between devices. All patterns are
-relative to the folder root.
-The contents of the \fB\&.stignore\fP file must be UTF\-8 encoded.
+\fB\&.stignore\fP can be created containing file patterns to ignore.  The \fB\&.stignore\fP
+file must be placed in the root of the synced folder (files in other locations are
+not applied).  The \fB\&.stignore\fP file itself will never be synced to other devices,
+although it can \fB#include\fP files that \fIare\fP synchronized between devices.  All
+patterns are relative to the synced folder root.  The contents of the \fB\&.stignore\fP
+file must be UTF\-8 encoded.
 .sp
 \fBNOTE:\fP
 .INDENT 0.0
@@ -89,18 +89,35 @@ any lower case character.
 .IP \(bu 2
 \fBBackslash\fP (\fB\e\fP) “escapes” a special character so that it loses its
 special meaning. For example, \fB\e{banana\e}\fP matches \fB{banana}\fP exactly
-and does not denote a set of alternatives as above. \fIEscaped characters
-are not supported on Windows.\fP
+and does not denote a set of alternatives as above.
+.UNINDENT
+.sp
+\fBNOTE:\fP
+.INDENT 0.0
+.INDENT 3.5
+Escaped characters are not supported on Windows, where \fB\e\fP is the
+path separator. If you still need to match files that have square or
+curly brackets in their names, one possible workaround is to replace
+them with \fB?\fP, which will then match any character. For example,
+you can type \fB?banana?\fP to match both \fB[banana]\fP and
+\fB{banana}\fP, and so on.
+.UNINDENT
+.UNINDENT
+.INDENT 0.0
 .IP \(bu 2
-A pattern beginning with \fB/\fP matches in the root of the folder only.
+A pattern beginning with \fB/\fP matches in the root of the synced folder only.
 \fB/foo\fP matches \fBfoo\fP but not \fBsubdir/foo\fP\&.
 .IP \(bu 2
 A pattern beginning with \fB#include\fP results in loading patterns
 from the named file. It is an error for a file to not exist or be
 included more than once. Note that while this can be used to include
 patterns from a file in a subdirectory, the patterns themselves are
-still relative to the folder \fIroot\fP\&. Example:
+still relative to the synced folder \fIroot\fP\&. Example:
 \fB#include more\-patterns.txt\fP\&.
+.sp
+Any \fB#include\fP directives inside a file loaded by \fB#include\fP require paths
+specified relative to the directory containing the loaded file, rather than the
+synchronised root directory.
 .IP \(bu 2
 A pattern beginning with a \fB!\fP prefix negates the pattern: matching files
 are \fIincluded\fP (that is, \fInot\fP ignored). This can be used to override
@@ -116,7 +133,9 @@ A pattern beginning with a \fB(?d)\fP prefix enables removal of these files if
 they are preventing directory deletion. This prefix should be used by any OS
 generated files which you are happy to be removed.
 .IP \(bu 2
-A line beginning with \fB//\fP is a comment and has no effect.
+A line beginning with \fB//\fP is a comment and has no effect. The same double
+slashes in any other place are interpreted literally, e.g. trying to do
+\fBfile // comment\fP will make Syncthing look for a file called \fBfile // comment\fP\&.
 .UNINDENT
 .sp
 \fBNOTE:\fP
@@ -132,7 +151,7 @@ single pair of parentheses (not “(?di)”).
 .INDENT 3.5
 Include patterns (that begin with \fB!\fP) cause Syncthing to traverse
 the entire directory tree regardless of other ignore patterns.
-If the watcher is enabled, the entire directory
+If the \fI\%watcher\fP is enabled, the entire directory
 tree will be watched as well.
 .sp
 Top\-level include patterns are treated as special cases and will not force Syncthing to
@@ -142,13 +161,14 @@ pattern, while \fB!/foo/bar\fP is not.
 .UNINDENT
 .SH EXAMPLE
 .sp
-Given a directory layout:
+Given a directory layout starting at the synced folder’s root:
 .INDENT 0.0
 .INDENT 3.5
 .sp
 .nf
 .ft C
 \&.DS_Store
+\&.stignore
 foo
 foofoo
 bar/
@@ -191,16 +211,16 @@ all files and directories called “foo”, ending in a “2” or starting with
 .nf
 .ft C
 \&.DS_Store     # ignored, will be deleted if gets in the way of parent directory removal
-foo           # ignored, matches "foo"
-foofoo        # synced, does not match "foo" but would match "foo*" or "*foo"
+foo           # ignored, matches \(dqfoo\(dq
+foofoo        # synced, does not match \(dqfoo\(dq but would match \(dqfoo*\(dq or \(dq*foo\(dq
 bar/          # synced
     baz       # synced
-    quux      # ignored, matches "qu*"
-    quuz      # synced, matches "qu*" but is excluded by the preceding "!quuz"
-bar2/         # synced, despite matching "*2" due to child frobble
+    quux      # ignored, matches \(dqqu*\(dq
+    quuz      # synced, matches \(dqqu*\(dq but is excluded by the preceding \(dq!quuz\(dq
+bar2/         # synced, despite matching \(dq*2\(dq due to child frobble
     baz       # ignored, due to parent being ignored
-    frobble   # synced, due to "!frobble"
-My Pictures/  # ignored, matched case insensitive "(?i)my pictures" pattern
+    frobble   # synced, due to \(dq!frobble\(dq
+My Pictures/  # ignored, matched case insensitive \(dq(?i)my pictures\(dq pattern
     Img15.PNG # ignored, due to parent being ignored
 .ft P
 .fi
@@ -216,6 +236,12 @@ directory itself. If you want the pattern to match the directory and its
 content, make sure it does not have a \fB/\fP at the end of the pattern.
 .UNINDENT
 .UNINDENT
+.sp
+New in version 1.19.0: Default patterns can be configured which will take effect when automatically
+accepting a folder from a remote device.  The GUI suggests same the patterns
+when adding a folder manually.  In either case, the \fB\&.stignore\fP file is
+created with these defaults if none is present yet.
+
 .SH AUTHOR
 The Syncthing Authors
 .SH COPYRIGHT

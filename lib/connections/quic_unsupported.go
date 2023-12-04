@@ -9,6 +9,12 @@
 
 package connections
 
+import (
+	"fmt"
+)
+
+var errNotInBuild = fmt.Errorf("%w: disabled at build time", errUnsupported)
+
 func init() {
 	for _, scheme := range []string{"quic", "quic4", "quic6"} {
 		listeners[scheme] = invalidListener{err: errNotInBuild}

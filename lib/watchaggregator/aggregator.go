@@ -162,8 +162,10 @@ func (a *aggregator) mainLoop(in <-chan fs.Event, out chan<- []string, cfg confi
 		select {
 		case event := <-in:
 			a.newEvent(event, inProgress)
-		case event := <-inProgressItemSubscription.C():
-			updateInProgressSet(event, inProgress)
+		case event, ok := <-inProgressItemSubscription.C():
+			if ok {
+				updateInProgressSet(event, inProgress)
+			}
 		case <-a.notifyTimer.C:
 			a.actOnTimer(out)
 		case interval := <-a.notifyTimerResetChan:
@@ -397,7 +399,7 @@ func (a *aggregator) popOldEventsTo(to map[string]*aggregatedEvent, dir *eventDi
 
 func (a *aggregator) isOld(ev *aggregatedEvent, currTime time.Time, delayRem bool) bool {
 	// Deletes should in general be scanned last, therefore they are delayed by
-	// letting them time out. This behaviour is overriden by delayRem == false.
+	// letting them time out. This behaviour is overridden by delayRem == false.
 	// Refer to following comments as to why.
 	// An event that has not registered any new modifications recently is scanned.
 	// a.notifyDelay is the user facing value signifying the normal delay between
@@ -411,7 +413,7 @@ func (a *aggregator) isOld(ev *aggregatedEvent, currTime time.Time, delayRem boo
 	// is delayed to reduce resource usage, but after a certain time (notifyTimeout)
 	// passed it is scanned anyway.
 	// If only removals are remaining to be scanned, there is no point to delay
-	// removals further, so this behaviour is overriden by delayRem == false.
+	// removals further, so this behaviour is overridden by delayRem == false.
 	return currTime.Sub(ev.firstModTime) > a.notifyTimeout
 }
 
@@ -419,11 +421,7 @@ func (a *aggregator) String() string {
 	return fmt.Sprintf("aggregator/%s:", a.folderCfg.Description())
 }
 
-func (a *aggregator) VerifyConfiguration(from, to config.Configuration) error {
-	return nil
-}
-
-func (a *aggregator) CommitConfiguration(from, to config.Configuration) bool {
+func (a *aggregator) CommitConfiguration(_, to config.Configuration) bool {
 	for _, folderCfg := range to.Folders {
 		if folderCfg.ID == a.folderID {
 			select {
@@ -458,10 +456,12 @@ func updateInProgressSet(event events.Event, inProgress map[string]struct{}) {
 // air, they were just considered as a sensible compromise between fast updates and
 // saving resources. For short delays the timeout is 6 times the delay, capped at 1
 // minute. For delays longer than 1 minute, the delay and timeout are equal.
-func notifyTimeout(eventDelayS int) time.Duration {
-	shortDelayS := 10
-	shortDelayMultiplicator := 6
-	longDelayS := 60
+func notifyTimeout(eventDelayS float64) time.Duration {
+	const (
+		shortDelayS             = 10
+		shortDelayMultiplicator = 6
+		longDelayS              = 60
+	)
 	longDelayTimeout := time.Duration(1) * time.Minute
 	if eventDelayS < shortDelayS {
 		return time.Duration(eventDelayS*shortDelayMultiplicator) * time.Second

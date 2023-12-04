@@ -64,7 +64,7 @@ func NewLocal(id protocol.DeviceID, addr string, addrList AddressLister, evLogge
 		return nil, err
 	}
 
-	if len(host) == 0 {
+	if host == "" {
 		// A broadcast client
 		c.name = "IPv4 local"
 		bcPort, err := strconv.Atoi(port)
@@ -109,6 +109,13 @@ func (c *localClient) Error() error {
 // send.
 func (c *localClient) announcementPkt(instanceID int64, msg []byte) ([]byte, bool) {
 	addrs := c.addrList.AllAddresses()
+
+	// remove all addresses which are not dialable
+	addrs = filterUndialableLocal(addrs)
+
+	// do not leak relay tokens to discovery
+	addrs = sanitizeRelayAddresses(addrs)
+
 	if len(addrs) == 0 {
 		// Nothing to announce
 		return msg, false
@@ -256,7 +263,7 @@ func (c *localClient) registerDevice(src net.Addr, device Announce) bool {
 				continue
 			}
 			u.Host = net.JoinHostPort(host, strconv.Itoa(tcpAddr.Port))
-			l.Debugf("discover: Reconstructed URL is %#v", u)
+			l.Debugf("discover: Reconstructed URL is %v", u)
 			validAddresses = append(validAddresses, u.String())
 			l.Debugf("discover: Replaced address %v in %s to get %s", tcpAddr.IP, addr, u.String())
 		} else {
@@ -280,4 +287,58 @@ func (c *localClient) registerDevice(src net.Addr, device Announce) bool {
 	}
 
 	return isNewDevice
+}
+
+// filterUndialableLocal returns the list of addresses after removing any
+// localhost, multicast, broadcast or port-zero addresses.
+func filterUndialableLocal(addrs []string) []string {
+	filtered := addrs[:0]
+	for _, addr := range addrs {
+		u, err := url.Parse(addr)
+		if err != nil {
+			continue
+		}
+
+		tcpAddr, err := net.ResolveTCPAddr("tcp", u.Host)
+		if err != nil {
+			continue
+		}
+
+		switch {
+		case len(tcpAddr.IP) == 0:
+		case tcpAddr.Port == 0:
+		case tcpAddr.IP.IsGlobalUnicast(), tcpAddr.IP.IsLinkLocalUnicast(), tcpAddr.IP.IsUnspecified():
+			filtered = append(filtered, addr)
+		}
+	}
+	return filtered
+}
+
+func sanitizeRelayAddresses(addrs []string) []string {
+	filtered := addrs[:0]
+	allowlist := []string{"id"}
+
+	for _, addr := range addrs {
+		u, err := url.Parse(addr)
+		if err != nil {
+			continue
+		}
+
+		if u.Scheme == "relay" {
+			s := url.Values{}
+			q := u.Query()
+
+			for _, w := range allowlist {
+				if q.Has(w) {
+					s.Add(w, q.Get(w))
+				}
+			}
+
+			u.RawQuery = s.Encode()
+			addr = u.String()
+		}
+
+		filtered = append(filtered, addr)
+	}
+	return filtered
 }

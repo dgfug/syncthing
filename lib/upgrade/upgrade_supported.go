@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
@@ -31,6 +30,7 @@ import (
 
 	"github.com/syncthing/syncthing/lib/dialer"
 	"github.com/syncthing/syncthing/lib/signature"
+	"golang.org/x/net/http2"
 )
 
 const DisabledByCompilation = false
@@ -76,8 +76,12 @@ var insecureHTTP = &http.Client{
 	},
 }
 
+func init() {
+	_ = http2.ConfigureTransport(insecureHTTP.Transport.(*http.Transport))
+}
+
 func insecureGet(url, version string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +288,7 @@ func readTarGz(archiveName, dir string, r io.Reader) (string, error) {
 }
 
 func readZip(archiveName, dir string, r io.Reader) (string, error) {
-	body, err := ioutil.ReadAll(r)
+	body, err := io.ReadAll(r)
 	if err != nil {
 		return "", err
 	}
@@ -357,7 +361,7 @@ func archiveFileVisitor(dir string, tempFile *string, signature *[]byte, archive
 
 	case "release.sig":
 		l.Debugf("found signature %s", archivePath)
-		*signature, err = ioutil.ReadAll(io.LimitReader(filedata, maxSignatureSize))
+		*signature, err = io.ReadAll(io.LimitReader(filedata, maxSignatureSize))
 		if err != nil {
 			return err
 		}
@@ -392,7 +396,7 @@ func verifyUpgrade(archiveName, tempName string, sig []byte) error {
 	// multireader. This ensures that it is not only a bonafide syncthing
 	// binary, but it is also of exactly the platform and version we expect.
 
-	mr := io.MultiReader(bytes.NewBufferString(archiveName+"\n"), fd)
+	mr := io.MultiReader(strings.NewReader(archiveName+"\n"), fd)
 	err = signature.Verify(SigningKey, sig, mr)
 	fd.Close()
 
@@ -407,7 +411,7 @@ func verifyUpgrade(archiveName, tempName string, sig []byte) error {
 func writeBinary(dir string, inFile io.Reader) (filename string, err error) {
 	// Write the binary to a temporary file.
 
-	outFile, err := ioutil.TempFile(dir, "syncthing")
+	outFile, err := os.CreateTemp(dir, "syncthing")
 	if err != nil {
 		return "", err
 	}

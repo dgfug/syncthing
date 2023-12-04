@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/syncthing/syncthing/lib/fs"
-	"github.com/syncthing/syncthing/lib/util"
+	"github.com/syncthing/syncthing/lib/structutil"
 )
 
 type TestStruct struct {
@@ -20,7 +20,7 @@ type TestStruct struct {
 func TestSizeDefaults(t *testing.T) {
 	x := &TestStruct{}
 
-	util.SetDefaults(x)
+	structutil.SetDefaults(x)
 
 	if !x.Size.Percentage() {
 		t.Error("not percentage")
@@ -159,8 +159,10 @@ func TestCheckAvailableSize(t *testing.T) {
 			continue
 		}
 		usage := fs.Usage{Free: tc.free, Total: tc.total}
-		if ok := checkAvailableSpace(tc.req, minFree, usage); ok != tc.ok {
-			t.Errorf("checkAvailableSpace(%v, %v, %v) == %v, expected %v", tc.req, minFree, usage, ok, tc.ok)
+		err = checkAvailableSpace(tc.req, minFree, usage)
+		t.Log(err)
+		if (err == nil) != tc.ok {
+			t.Errorf("checkAvailableSpace(%v, %v, %v) == %v, expected %v", tc.req, minFree, usage, err, tc.ok)
 		}
 	}
 }

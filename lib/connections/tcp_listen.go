@@ -32,11 +32,13 @@ type tcpListener struct {
 	svcutil.ServiceWithError
 	onAddressesChangedNotifier
 
-	uri     *url.URL
-	cfg     config.Wrapper
-	tlsCfg  *tls.Config
-	conns   chan internalConn
-	factory listenerFactory
+	uri        *url.URL
+	cfg        config.Wrapper
+	tlsCfg     *tls.Config
+	conns      chan internalConn
+	factory    listenerFactory
+	registry   *registry.Registry
+	lanChecker *lanChecker
 
 	natService *nat.Service
 	mapping    *nat.Mapping
@@ -69,14 +71,14 @@ func (t *tcpListener) serve(ctx context.Context) error {
 	t.notifyAddressesChanged(t)
 	defer t.clearAddresses(t)
 
-	registry.Register(t.uri.Scheme, tcaddr)
-	defer registry.Unregister(t.uri.Scheme, tcaddr)
+	t.registry.Register(t.uri.Scheme, tcaddr)
+	defer t.registry.Unregister(t.uri.Scheme, tcaddr)
 
 	l.Infof("TCP listener (%v) starting", tcaddr)
 	defer l.Infof("TCP listener (%v) shutting down", tcaddr)
 
 	mapping := t.natService.NewMapping(nat.TCP, tcaddr.IP, tcaddr.Port)
-	mapping.OnChanged(func(_ *nat.Mapping, _, _ []nat.Address) {
+	mapping.OnChanged(func() {
 		t.notifyAddressesChanged(t)
 	})
 	// Should be called after t.mapping is nil'ed out.
@@ -147,7 +149,12 @@ func (t *tcpListener) serve(ctx context.Context) error {
 			continue
 		}
 
-		t.conns <- newInternalConn(tc, connTypeTCPServer, tcpPriority)
+		priority := t.cfg.Options().ConnectionPriorityTCPWAN
+		isLocal := t.lanChecker.isLAN(conn.RemoteAddr())
+		if isLocal {
+			priority = t.cfg.Options().ConnectionPriorityTCPLAN
+		}
+		t.conns <- newInternalConn(tc, connTypeTCPServer, isLocal, priority)
 	}
 }
 
@@ -171,10 +178,10 @@ func (t *tcpListener) WANAddresses() []*url.URL {
 			// For every address with a specified IP, add one without an IP,
 			// just in case the specified IP is still internal (router behind DMZ).
 			if len(addr.IP) != 0 && !addr.IP.IsUnspecified() {
-				uri = *t.uri
+				zeroUri := *t.uri
 				addr.IP = nil
-				uri.Host = addr.String()
-				uris = append(uris, &uri)
+				zeroUri.Host = addr.String()
+				uris = append(uris, &zeroUri)
 			}
 		}
 	}
@@ -207,13 +214,13 @@ func (t *tcpListener) Factory() listenerFactory {
 	return t.factory
 }
 
-func (t *tcpListener) NATType() string {
+func (*tcpListener) NATType() string {
 	return "unknown"
 }
 
 type tcpListenerFactory struct{}
 
-func (f *tcpListenerFactory) New(uri *url.URL, cfg config.Wrapper, tlsCfg *tls.Config, conns chan internalConn, natService *nat.Service) genericListener {
+func (f *tcpListenerFactory) New(uri *url.URL, cfg config.Wrapper, tlsCfg *tls.Config, conns chan internalConn, natService *nat.Service, registry *registry.Registry, lanChecker *lanChecker) genericListener {
 	l := &tcpListener{
 		uri:        fixupPort(uri, config.DefaultTCPPort),
 		cfg:        cfg,
@@ -221,6 +228,8 @@ func (f *tcpListenerFactory) New(uri *url.URL, cfg config.Wrapper, tlsCfg *tls.C
 		conns:      conns,
 		natService: natService,
 		factory:    f,
+		registry:   registry,
+		lanChecker: lanChecker,
 	}
 	l.ServiceWithError = svcutil.AsService(l.serve, l.String())
 	return l

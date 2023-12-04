@@ -19,11 +19,12 @@ import (
 	"github.com/thejerf/suture/v4"
 
 	"github.com/syncthing/syncthing/lib/config"
+	"github.com/syncthing/syncthing/lib/connections/registry"
 	"github.com/syncthing/syncthing/lib/events"
 	"github.com/syncthing/syncthing/lib/protocol"
+	"github.com/syncthing/syncthing/lib/stringutil"
 	"github.com/syncthing/syncthing/lib/svcutil"
 	"github.com/syncthing/syncthing/lib/sync"
-	"github.com/syncthing/syncthing/lib/util"
 )
 
 // The Manager aggregates results from multiple Finders. Each Finder has
@@ -44,12 +45,13 @@ type manager struct {
 	cert          tls.Certificate
 	evLogger      events.Logger
 	addressLister AddressLister
+	registry      *registry.Registry
 
 	finders map[string]cachedFinder
 	mut     sync.RWMutex
 }
 
-func NewManager(myID protocol.DeviceID, cfg config.Wrapper, cert tls.Certificate, evLogger events.Logger, lister AddressLister) Manager {
+func NewManager(myID protocol.DeviceID, cfg config.Wrapper, cert tls.Certificate, evLogger events.Logger, lister AddressLister, registry *registry.Registry) Manager {
 	m := &manager{
 		Supervisor:    suture.New("discover.Manager", svcutil.SpecWithDebugLogger(l)),
 		myID:          myID,
@@ -57,6 +59,7 @@ func NewManager(myID protocol.DeviceID, cfg config.Wrapper, cert tls.Certificate
 		cert:          cert,
 		evLogger:      evLogger,
 		addressLister: lister,
+		registry:      registry,
 
 		finders: make(map[string]cachedFinder),
 		mut:     sync.NewRWMutex(),
@@ -155,7 +158,7 @@ func (m *manager) Lookup(ctx context.Context, deviceID protocol.DeviceID) (addre
 	}
 	m.mut.RUnlock()
 
-	addresses = util.UniqueTrimmedStrings(addresses)
+	addresses = stringutil.UniqueTrimmedStrings(addresses)
 	sort.Strings(addresses)
 
 	l.Debugln("lookup results for", deviceID)
@@ -164,11 +167,11 @@ func (m *manager) Lookup(ctx context.Context, deviceID protocol.DeviceID) (addre
 	return addresses, nil
 }
 
-func (m *manager) String() string {
+func (*manager) String() string {
 	return "discovery cache"
 }
 
-func (m *manager) Error() error {
+func (*manager) Error() error {
 	return nil
 }
 
@@ -220,15 +223,11 @@ func (m *manager) Cache() map[protocol.DeviceID]CacheEntry {
 	m.mut.RUnlock()
 
 	for k, v := range res {
-		v.Addresses = util.UniqueTrimmedStrings(v.Addresses)
+		v.Addresses = stringutil.UniqueTrimmedStrings(v.Addresses)
 		res[k] = v
 	}
 
 	return res
-}
-
-func (m *manager) VerifyConfiguration(_, _ config.Configuration) error {
-	return nil
 }
 
 func (m *manager) CommitConfiguration(_, to config.Configuration) (handled bool) {
@@ -261,7 +260,7 @@ func (m *manager) CommitConfiguration(_, to config.Configuration) (handled bool)
 			if _, ok := m.finders[identity]; ok {
 				continue
 			}
-			gd, err := NewGlobal(srv, m.cert, m.addressLister, m.evLogger)
+			gd, err := NewGlobal(srv, m.cert, m.addressLister, m.evLogger, m.registry)
 			if err != nil {
 				l.Warnln("Global discovery:", err)
 				continue

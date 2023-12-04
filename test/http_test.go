@@ -11,8 +11,9 @@ package integration
 
 import (
 	"bytes"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -33,7 +34,7 @@ func TestHTTPGetIndex(t *testing.T) {
 	if res.StatusCode != 200 {
 		t.Errorf("Status %d != 200", res.StatusCode)
 	}
-	bs, err := ioutil.ReadAll(res.Body)
+	bs, err := io.ReadAll(res.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestHTTPGetIndex(t *testing.T) {
 	if res.StatusCode != 200 {
 		t.Errorf("Status %d != 200", res.StatusCode)
 	}
-	bs, err = ioutil.ReadAll(res.Body)
+	bs, err = io.ReadAll(res.Body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +173,7 @@ func TestHTTPPOSTWithoutCSRF(t *testing.T) {
 	}
 	res.Body.Close()
 	hdr := res.Header.Get("Set-Cookie")
-	id := res.Header.Get("X-Syncthing-ID")[:5]
+	id := res.Header.Get("X-Syncthing-ID")[:protocol.ShortIDStringLength]
 	if !strings.Contains(hdr, "CSRF-Token") {
 		t.Error("Missing CSRF-Token in", hdr)
 	}
@@ -222,7 +223,7 @@ func setupAPIBench() *rc.Process {
 		panic(err)
 	}
 
-	err = ioutil.WriteFile("s1/knownfile", []byte("somedatahere"), 0644)
+	err = os.WriteFile("s1/knownfile", []byte("somedatahere"), 0644)
 	if err != nil {
 		panic(err)
 	}

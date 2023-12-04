@@ -46,6 +46,7 @@ type apiKeyValidator interface {
 func newCsrfManager(unique string, prefix string, apiKeyValidator apiKeyValidator, next http.Handler, saveLocation string) *csrfManager {
 	m := &csrfManager{
 		tokensMut:       sync.NewMutex(),
+		tokens:          make([]string, 0, maxCsrfTokens),
 		unique:          unique,
 		prefix:          prefix,
 		apiKeyValidator: apiKeyValidator,
@@ -58,7 +59,7 @@ func newCsrfManager(unique string, prefix string, apiKeyValidator apiKeyValidato
 
 func (m *csrfManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Allow requests carrying a valid API key
-	if m.apiKeyValidator.IsValidAPIKey(r.Header.Get("X-API-Key")) {
+	if hasValidAPIKeyHeader(r, m.apiKeyValidator) {
 		// Set the access-control-allow-origin header for CORS requests
 		// since a valid API key has been provided
 		w.Header().Add("Access-Control-Allow-Origin", "*")
@@ -89,6 +90,13 @@ func (m *csrfManager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isNoAuthPath(r.URL.Path) {
+		// REST calls that don't require authentication also do not
+		// need a CSRF token.
+		m.next.ServeHTTP(w, r)
+		return
+	}
+
 	// Verify the CSRF token
 	token := r.Header.Get("X-CSRF-Token-" + m.unique)
 	if !m.validToken(token) {
@@ -108,7 +116,7 @@ func (m *csrfManager) validToken(token string) bool {
 				// Move this token to the head of the list. Copy the tokens at
 				// the front one step to the right and then replace the token
 				// at the head.
-				copy(m.tokens[1:], m.tokens[:i+1])
+				copy(m.tokens[1:], m.tokens[:i])
 				m.tokens[0] = token
 			}
 			return true
@@ -121,11 +129,13 @@ func (m *csrfManager) newToken() string {
 	token := rand.String(32)
 
 	m.tokensMut.Lock()
-	m.tokens = append([]string{token}, m.tokens...)
-	if len(m.tokens) > maxCsrfTokens {
-		m.tokens = m.tokens[:maxCsrfTokens]
-	}
 	defer m.tokensMut.Unlock()
+
+	if len(m.tokens) < maxCsrfTokens {
+		m.tokens = append(m.tokens, "")
+	}
+	copy(m.tokens[1:], m.tokens)
+	m.tokens[0] = token
 
 	m.save()
 
@@ -167,4 +177,15 @@ func (m *csrfManager) load() {
 	for s.Scan() {
 		m.tokens = append(m.tokens, s.Text())
 	}
+}
+
+func hasValidAPIKeyHeader(r *http.Request, validator apiKeyValidator) bool {
+	if key := r.Header.Get("X-API-Key"); validator.IsValidAPIKey(key) {
+		return true
+	}
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+		bearerToken := auth[len("bearer "):]
+		return validator.IsValidAPIKey(bearerToken)
+	}
+	return false
 }

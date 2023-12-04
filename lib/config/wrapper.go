@@ -20,6 +20,7 @@ import (
 	"github.com/syncthing/syncthing/lib/events"
 	"github.com/syncthing/syncthing/lib/osutil"
 	"github.com/syncthing/syncthing/lib/protocol"
+	"github.com/syncthing/syncthing/lib/sliceutil"
 	"github.com/syncthing/syncthing/lib/sync"
 	"github.com/thejerf/suture/v4"
 )
@@ -31,14 +32,14 @@ const (
 
 var errTooManyModifications = errors.New("too many concurrent config modifications")
 
-// The Committer interface is implemented by objects that need to know about
-// or have a say in configuration changes.
+// The Committer and Verifier interfaces are implemented by objects
+// that need to know about or have a say in configuration changes.
 //
 // When the configuration is about to be changed, VerifyConfiguration() is
-// called for each subscribing object, with the old and new configuration. A
-// nil error is returned if the new configuration is acceptable (i.e. does not
-// contain any errors that would prevent it from being a valid config).
-// Otherwise an error describing the problem is returned.
+// called for each subscribing object that implements it, with copies of the
+// old and new configuration. A nil error is returned if the new configuration
+// is acceptable (i.e., does not contain any errors that would prevent it from
+// being a valid config). Otherwise an error describing the problem is returned.
 //
 // If any subscriber returns an error from VerifyConfiguration(), the
 // configuration change is not committed and an error is returned to whoever
@@ -55,9 +56,14 @@ var errTooManyModifications = errors.New("too many concurrent config modificatio
 // configuration (e.g. calling Wrapper.SetFolder), that are also acquired in any
 // methods of the Committer interface.
 type Committer interface {
-	VerifyConfiguration(from, to Configuration) error
 	CommitConfiguration(from, to Configuration) (handled bool)
 	String() string
+}
+
+// A Verifier can determine if a new configuration is acceptable.
+// See the description for Committer, above.
+type Verifier interface {
+	VerifyConfiguration(from, to Configuration) error
 }
 
 // Waiter allows to wait for the given config operation to complete.
@@ -95,6 +101,7 @@ type Wrapper interface {
 	GUI() GUIConfiguration
 	LDAP() LDAPConfiguration
 	Options() OptionsConfiguration
+	DefaultIgnores() Ignores
 
 	Folder(id string) (FolderConfiguration, bool)
 	Folders() map[string]FolderConfiguration
@@ -128,7 +135,7 @@ type wrapper struct {
 	subs   []Committer
 	mut    sync.Mutex
 
-	requiresRestart uint32 // an atomic bool
+	requiresRestart atomic.Bool
 }
 
 // Wrap wraps an existing Configuration structure and ties it to a file on
@@ -192,9 +199,7 @@ func (w *wrapper) Unsubscribe(c Committer) {
 	w.mut.Lock()
 	for i := range w.subs {
 		if w.subs[i] == c {
-			copy(w.subs[i:], w.subs[i+1:])
-			w.subs[len(w.subs)-1] = nil
-			w.subs = w.subs[:len(w.subs)-1]
+			w.subs = sliceutil.RemoveAndZero(w.subs, i)
 			break
 		}
 	}
@@ -287,6 +292,9 @@ func (w *wrapper) Serve(ctx context.Context) error {
 }
 
 func (w *wrapper) serveSave() {
+	if w.path == "" {
+		return
+	}
 	if err := w.Save(); err != nil {
 		l.Warnln("Failed to save config:", err)
 	}
@@ -300,6 +308,10 @@ func (w *wrapper) replaceLocked(to Configuration) (Waiter, error) {
 	}
 
 	for _, sub := range w.subs {
+		sub, ok := sub.(Verifier)
+		if !ok {
+			continue
+		}
 		l.Debugln(sub, "verifying configuration")
 		if err := sub.VerifyConfiguration(from.Copy(), to.Copy()); err != nil {
 			l.Debugln(sub, "rejected config:", err)
@@ -318,8 +330,8 @@ func (w *wrapper) notifyListeners(from, to Configuration) Waiter {
 	wg := sync.NewWaitGroup()
 	wg.Add(len(w.subs))
 	for _, sub := range w.subs {
-		go func(commiter Committer) {
-			w.notifyListener(commiter, from, to)
+		go func(committer Committer) {
+			w.notifyListener(committer, from, to)
 			wg.Done()
 		}(sub)
 	}
@@ -330,7 +342,7 @@ func (w *wrapper) notifyListener(sub Committer, from, to Configuration) {
 	l.Debugln(sub, "committing configuration")
 	if !sub.CommitConfiguration(from, to) {
 		l.Debugln(sub, "requires restart")
-		w.setRequiresRestart()
+		w.requiresRestart.Store(true)
 	}
 }
 
@@ -428,6 +440,13 @@ func (w *wrapper) GUI() GUIConfiguration {
 	return w.cfg.GUI.Copy()
 }
 
+// DefaultIgnores returns the list of ignore patterns to be used by default on folders.
+func (w *wrapper) DefaultIgnores() Ignores {
+	w.mut.Lock()
+	defer w.mut.Unlock()
+	return w.cfg.Defaults.Ignores.Copy()
+}
+
 // IgnoredDevice returns whether or not connection attempts from the given
 // device should be silently ignored.
 func (w *wrapper) IgnoredDevice(id protocol.DeviceID) bool {
@@ -493,7 +512,7 @@ func (w *wrapper) Save() error {
 		return err
 	}
 
-	if err := w.cfg.WriteXML(fd); err != nil {
+	if err := w.cfg.WriteXML(osutil.LineEndingsWriter(fd)); err != nil {
 		l.Debugln("WriteXML:", err)
 		fd.Close()
 		return err
@@ -508,13 +527,7 @@ func (w *wrapper) Save() error {
 	return nil
 }
 
-func (w *wrapper) RequiresRestart() bool {
-	return atomic.LoadUint32(&w.requiresRestart) != 0
-}
-
-func (w *wrapper) setRequiresRestart() {
-	atomic.StoreUint32(&w.requiresRestart, 1)
-}
+func (w *wrapper) RequiresRestart() bool { return w.requiresRestart.Load() }
 
 type modifyEntry struct {
 	modifyFunc ModifyFunction

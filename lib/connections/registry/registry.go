@@ -12,11 +12,8 @@ package registry
 import (
 	"strings"
 
+	"github.com/syncthing/syncthing/lib/sliceutil"
 	"github.com/syncthing/syncthing/lib/sync"
-)
-
-var (
-	Default = New()
 )
 
 type Registry struct {
@@ -45,9 +42,7 @@ func (r *Registry) Unregister(scheme string, item interface{}) {
 	candidates := r.available[scheme]
 	for i, existingItem := range candidates {
 		if existingItem == item {
-			candidates[i] = candidates[len(candidates)-1]
-			candidates[len(candidates)-1] = nil
-			r.available[scheme] = candidates[:len(candidates)-1]
+			r.available[scheme] = sliceutil.RemoveAndZero(candidates, i)
 			break
 		}
 	}
@@ -84,16 +79,4 @@ func (r *Registry) Get(scheme string, preferred func(interface{}) bool) interfac
 		}
 	}
 	return best
-}
-
-func Register(scheme string, item interface{}) {
-	Default.Register(scheme, item)
-}
-
-func Unregister(scheme string, item interface{}) {
-	Default.Unregister(scheme, item)
-}
-
-func Get(scheme string, preferred func(interface{}) bool) interface{} {
-	return Default.Get(scheme, preferred)
 }

@@ -1,61 +1,81 @@
 module github.com/syncthing/syncthing
 
+go 1.20
+
 require (
-	github.com/AudriusButkevicius/pfilter v0.0.10
-	github.com/AudriusButkevicius/recli v0.0.6
-	github.com/alecthomas/kong v0.2.17
-	github.com/bkaradzic/go-lz4 v0.0.0-20160924222819-7224d8d8f27e
+	github.com/AudriusButkevicius/recli v0.0.7-0.20220911121932-d000ce8fbf0f
+	github.com/alecthomas/kong v0.8.1
+	github.com/calmh/incontainer v0.0.0-20221224152218-b3e71b103d7a
 	github.com/calmh/xdr v1.1.0
-	github.com/ccding/go-stun v0.1.3
+	github.com/ccding/go-stun v0.1.4
 	github.com/certifi/gocertifi v0.0.0-20210507211836-431795d63e8d // indirect
-	github.com/cespare/xxhash/v2 v2.1.2 // indirect
-	github.com/chmduquesne/rollinghash v0.0.0-20180912150627-a60f8e7142b5
-	github.com/cpuguy83/go-md2man/v2 v2.0.1 // indirect
+	github.com/cespare/xxhash/v2 v2.2.0 // indirect
+	github.com/chmduquesne/rollinghash v4.0.0+incompatible
+	github.com/cpuguy83/go-md2man/v2 v2.0.3 // indirect
 	github.com/d4l3k/messagediff v1.2.1
 	github.com/flynn-archive/go-shlex v0.0.0-20150515145356-3f9db97f8568
-	github.com/fsnotify/fsnotify v1.5.1 // indirect
 	github.com/getsentry/raven-go v0.2.0
-	github.com/go-asn1-ber/asn1-ber v1.5.3 // indirect
-	github.com/go-ldap/ldap/v3 v3.4.1
-	github.com/go-ole/go-ole v1.2.6-0.20210915003542-8b1f7f90f6b1 // indirect
+	github.com/go-asn1-ber/asn1-ber v1.5.5 // indirect
+	github.com/go-ldap/ldap/v3 v3.4.6
 	github.com/gobwas/glob v0.2.3
 	github.com/gogo/protobuf v1.3.2
-	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
 	github.com/golang/snappy v0.0.4 // indirect
-	github.com/greatroar/blobloom v0.7.0
-	github.com/hashicorp/golang-lru v0.5.4
-	github.com/jackpal/gateway v1.0.7
+	github.com/greatroar/blobloom v0.7.2
+	github.com/hashicorp/golang-lru/v2 v2.0.7
+	github.com/jackpal/gateway v1.0.10
 	github.com/jackpal/go-nat-pmp v1.0.2
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
-	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
-	github.com/lib/pq v1.10.3
-	github.com/lucas-clemente/quic-go v0.23.0
-	github.com/maruel/panicparse v1.6.1
-	github.com/maxbrunsfeld/counterfeiter/v6 v6.3.0
-	github.com/minio/sha256-simd v1.0.0
+	github.com/klauspost/cpuid/v2 v2.2.6 // indirect
+	github.com/lib/pq v1.10.9
+	github.com/maruel/panicparse/v2 v2.3.1
+	github.com/maxbrunsfeld/counterfeiter/v6 v6.5.0
+	github.com/minio/sha256-simd v1.0.1
 	github.com/miscreant/miscreant.go v0.0.0-20200214223636-26d376326b75
-	github.com/oschwald/geoip2-golang v1.5.0
-	github.com/pkg/errors v0.9.1
-	github.com/prometheus/client_golang v1.11.0
-	github.com/prometheus/common v0.30.0 // indirect
-	github.com/prometheus/procfs v0.7.3 // indirect
+	github.com/oschwald/geoip2-golang v1.9.0
+	github.com/pierrec/lz4/v4 v4.1.18
+	github.com/pkg/errors v0.9.1 // indirect
+	github.com/prometheus/client_golang v1.17.0
+	github.com/prometheus/common v0.45.0 // indirect
+	github.com/prometheus/procfs v0.12.0 // indirect
+	github.com/quic-go/quic-go v0.40.0
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
 	github.com/sasha-s/go-deadlock v0.3.1
-	github.com/shirou/gopsutil/v3 v3.21.8
+	github.com/shirou/gopsutil/v3 v3.23.10
 	github.com/syncthing/notify v0.0.0-20210616190510-c6b7342338d2
-	github.com/syndtr/goleveldb v1.0.1-0.20200815071216-d9e9293bd0f7
-	github.com/thejerf/suture/v4 v4.0.1
-	github.com/urfave/cli v1.22.5
+	github.com/syndtr/goleveldb v1.0.1-0.20220721030215-126854af5e6d
+	github.com/thejerf/suture/v4 v4.0.2
+	github.com/urfave/cli v1.22.14
 	github.com/vitrun/qart v0.0.0-20160531060029-bf64b92db6b0
-	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519
-	golang.org/x/mod v0.5.1 // indirect
-	golang.org/x/net v0.0.0-20210924151903-3ad01bbaa167
-	golang.org/x/sys v0.0.0-20210925032602-92d5a993a665
-	golang.org/x/text v0.3.7
-	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac
-	golang.org/x/tools v0.1.6
-	google.golang.org/protobuf v1.27.1
+	golang.org/x/crypto v0.15.0
+	golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa
+	golang.org/x/mod v0.14.0 // indirect
+	golang.org/x/net v0.18.0
+	golang.org/x/sys v0.14.0
+	golang.org/x/text v0.14.0
+	golang.org/x/time v0.4.0
+	golang.org/x/tools v0.15.0
+	google.golang.org/protobuf v1.31.0
 )
 
-go 1.16
+require (
+	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
+	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/go-ole/go-ole v1.3.0 // indirect
+	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
+	github.com/google/pprof v0.0.0-20231101202521-4ca4178f5c7a // indirect
+	github.com/google/uuid v1.4.0 // indirect
+	github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 // indirect
+	github.com/onsi/ginkgo/v2 v2.13.1 // indirect
+	github.com/oschwald/maxminddb-golang v1.12.0 // indirect
+	github.com/petermattis/goid v0.0.0-20230904192822-1876fd5063bc // indirect
+	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
+	github.com/prometheus/client_model v0.5.0 // indirect
+	github.com/quic-go/qtls-go1-20 v0.4.1 // indirect
+	github.com/russross/blackfriday/v2 v2.1.0 // indirect
+	github.com/yusufpapurcu/wmi v1.2.3 // indirect
+	go.uber.org/mock v0.3.0 // indirect
+)
+
+// https://github.com/gobwas/glob/pull/55
+replace github.com/gobwas/glob v0.2.3 => github.com/calmh/glob v0.0.0-20220615080505-1d823af5017b

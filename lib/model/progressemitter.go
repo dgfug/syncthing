@@ -212,11 +212,6 @@ func (t *ProgressEmitter) computeProgressUpdates() []progressUpdate {
 	return progressUpdates
 }
 
-// VerifyConfiguration implements the config.Committer interface
-func (t *ProgressEmitter) VerifyConfiguration(from, to config.Configuration) error {
-	return nil
-}
-
 // CommitConfiguration implements the config.Committer interface
 func (t *ProgressEmitter) CommitConfiguration(_, to config.Configuration) bool {
 	t.mut.Lock()
@@ -320,15 +315,15 @@ func (t *ProgressEmitter) emptyLocked() bool {
 func (t *ProgressEmitter) temporaryIndexSubscribe(conn protocol.Connection, folders []string) {
 	t.mut.Lock()
 	defer t.mut.Unlock()
-	t.connections[conn.ID()] = conn
-	t.foldersByConns[conn.ID()] = folders
+	t.connections[conn.DeviceID()] = conn
+	t.foldersByConns[conn.DeviceID()] = folders
 }
 
 func (t *ProgressEmitter) temporaryIndexUnsubscribe(conn protocol.Connection) {
 	t.mut.Lock()
 	defer t.mut.Unlock()
-	delete(t.connections, conn.ID())
-	delete(t.foldersByConns, conn.ID())
+	delete(t.connections, conn.DeviceID())
+	delete(t.foldersByConns, conn.DeviceID())
 }
 
 func (t *ProgressEmitter) clearLocked() {

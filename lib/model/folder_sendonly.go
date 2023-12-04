@@ -12,7 +12,7 @@ import (
 	"github.com/syncthing/syncthing/lib/events"
 	"github.com/syncthing/syncthing/lib/ignore"
 	"github.com/syncthing/syncthing/lib/protocol"
-	"github.com/syncthing/syncthing/lib/util"
+	"github.com/syncthing/syncthing/lib/semaphore"
 	"github.com/syncthing/syncthing/lib/versioner"
 )
 
@@ -24,7 +24,7 @@ type sendOnlyFolder struct {
 	folder
 }
 
-func newSendOnlyFolder(model *model, fset *db.FileSet, ignores *ignore.Matcher, cfg config.FolderConfiguration, _ versioner.Versioner, evLogger events.Logger, ioLimiter *util.Semaphore) service {
+func newSendOnlyFolder(model *model, fset *db.FileSet, ignores *ignore.Matcher, cfg config.FolderConfiguration, _ versioner.Versioner, evLogger events.Logger, ioLimiter *semaphore.Semaphore) service {
 	f := &sendOnlyFolder{
 		folder: newFolder(model, fset, ignores, cfg, evLogger, ioLimiter, nil),
 	}
@@ -32,7 +32,7 @@ func newSendOnlyFolder(model *model, fset *db.FileSet, ignores *ignore.Matcher, 
 	return f
 }
 
-func (f *sendOnlyFolder) PullErrors() []FileError {
+func (*sendOnlyFolder) PullErrors() []FileError {
 	return nil
 }
 
@@ -72,7 +72,12 @@ func (f *sendOnlyFolder) pull() (bool, error) {
 			return true
 		}
 
-		if !file.IsEquivalentOptional(curFile, f.modTimeWindow, f.IgnorePerms, false, 0) {
+		if !file.IsEquivalentOptional(curFile, protocol.FileInfoComparison{
+			ModTimeWindow:   f.modTimeWindow,
+			IgnorePerms:     f.IgnorePerms,
+			IgnoreOwnership: !f.SyncOwnership,
+			IgnoreXattrs:    !f.SyncXattrs,
+		}) {
 			return true
 		}
 

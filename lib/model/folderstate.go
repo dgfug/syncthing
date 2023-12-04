@@ -52,6 +52,34 @@ func (s folderState) String() string {
 	}
 }
 
+type remoteFolderState int
+
+const (
+	remoteFolderUnknown remoteFolderState = iota
+	remoteFolderNotSharing
+	remoteFolderPaused
+	remoteFolderValid
+)
+
+func (s remoteFolderState) String() string {
+	switch s {
+	case remoteFolderUnknown:
+		return "unknown"
+	case remoteFolderNotSharing:
+		return "notSharing"
+	case remoteFolderPaused:
+		return "paused"
+	case remoteFolderValid:
+		return "valid"
+	default:
+		return "unknown"
+	}
+}
+
+func (s remoteFolderState) MarshalText() ([]byte, error) {
+	return []byte(s.String()), nil
+}
+
 type stateTracker struct {
 	folderID string
 	evLogger events.Logger
@@ -82,6 +110,10 @@ func (s *stateTracker) setState(newState folderState) {
 	if newState == s.current {
 		return
 	}
+
+	defer func() {
+		metricFolderState.WithLabelValues(s.folderID).Set(float64(s.current))
+	}()
 
 	/* This should hold later...
 	if s.current != FolderIdle && (newState == FolderScanning || newState == FolderSyncing) {
@@ -119,6 +151,10 @@ func (s *stateTracker) getState() (current folderState, changed time.Time, err e
 func (s *stateTracker) setError(err error) {
 	s.mut.Lock()
 	defer s.mut.Unlock()
+
+	defer func() {
+		metricFolderState.WithLabelValues(s.folderID).Set(float64(s.current))
+	}()
 
 	eventData := map[string]interface{}{
 		"folder": s.folderID,

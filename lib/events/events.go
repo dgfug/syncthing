@@ -35,6 +35,7 @@ const (
 	PendingDevicesChanged
 	DevicePaused
 	DeviceResumed
+	ClusterConfigReceived
 	LocalChangeDetected
 	RemoteChangeDetected
 	LocalIndexUpdated
@@ -118,6 +119,8 @@ func (t EventType) String() string {
 		return "DevicePaused"
 	case DeviceResumed:
 		return "DeviceResumed"
+	case ClusterConfigReceived:
+		return "ClusterConfigReceived"
 	case FolderScanProgress:
 		return "FolderScanProgress"
 	case FolderPaused:
@@ -203,6 +206,8 @@ func UnmarshalEventType(s string) EventType {
 		return DevicePaused
 	case "DeviceResumed":
 		return DeviceResumed
+	case "ClusterConfigReceived":
+		return ClusterConfigReceived
 	case "FolderScanProgress":
 		return FolderScanProgress
 	case "FolderPaused":
@@ -292,6 +297,7 @@ loop:
 		case e := <-l.events:
 			// Incoming events get sent
 			l.sendEvent(e)
+			metricEvents.WithLabelValues(e.Type.String(), metricEventStateCreated).Inc()
 
 		case fn := <-l.funcs:
 			// Subscriptions are handled here.
@@ -340,9 +346,11 @@ func (l *logger) sendEvent(e Event) {
 
 			select {
 			case s.events <- e:
+				metricEvents.WithLabelValues(e.Type.String(), metricEventStateDelivered).Inc()
 			case <-l.timeout.C:
 				// if s.events is not ready, drop the event
 				timedOut = true
+				metricEvents.WithLabelValues(e.Type.String(), metricEventStateDropped).Inc()
 			}
 
 			// If stop returns false it already sent something to the
@@ -546,13 +554,11 @@ type noopLogger struct{}
 
 var NoopLogger Logger = &noopLogger{}
 
-func (*noopLogger) Serve(ctx context.Context) error { return nil }
+func (*noopLogger) Serve(_ context.Context) error { return nil }
 
-func (*noopLogger) Stop() {}
+func (*noopLogger) Log(_ EventType, _ interface{}) {}
 
-func (*noopLogger) Log(t EventType, data interface{}) {}
-
-func (*noopLogger) Subscribe(mask EventType) Subscription {
+func (*noopLogger) Subscribe(_ EventType) Subscription {
 	return &noopSubscription{}
 }
 
@@ -562,11 +568,11 @@ func (*noopSubscription) C() <-chan Event {
 	return nil
 }
 
-func (*noopSubscription) Poll(timeout time.Duration) (Event, error) {
+func (*noopSubscription) Poll(_ time.Duration) (Event, error) {
 	return Event{}, errNoop
 }
 
-func (s *noopSubscription) Mask() EventType {
+func (*noopSubscription) Mask() EventType {
 	return 0
 }
 

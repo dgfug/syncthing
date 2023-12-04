@@ -8,17 +8,18 @@ package pmp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
 	"time"
 
 	"github.com/jackpal/gateway"
-	"github.com/jackpal/go-nat-pmp"
-	"github.com/pkg/errors"
+	natpmp "github.com/jackpal/go-nat-pmp"
 
 	"github.com/syncthing/syncthing/lib/nat"
-	"github.com/syncthing/syncthing/lib/util"
+	"github.com/syncthing/syncthing/lib/osutil"
+	"github.com/syncthing/syncthing/lib/svcutil"
 )
 
 func init() {
@@ -27,7 +28,7 @@ func init() {
 
 func Discover(ctx context.Context, renewal, timeout time.Duration) []nat.Device {
 	var ip net.IP
-	err := util.CallWithContext(ctx, func() error {
+	err := svcutil.CallWithContext(ctx, func() error {
 		var err error
 		ip, err = gateway.DiscoverGateway()
 		return err
@@ -45,12 +46,12 @@ func Discover(ctx context.Context, renewal, timeout time.Duration) []nat.Device 
 	c := natpmp.NewClientWithTimeout(ip, timeout)
 	// Try contacting the gateway, if it does not respond, assume it does not
 	// speak NAT-PMP.
-	err = util.CallWithContext(ctx, func() error {
+	err = svcutil.CallWithContext(ctx, func() error {
 		_, ierr := c.GetExternalAddress()
 		return ierr
 	})
 	if err != nil {
-		if errors.Cause(err) == context.Canceled {
+		if errors.Is(err, context.Canceled) {
 			return nil
 		}
 		if strings.Contains(err.Error(), "Timed out") {
@@ -66,10 +67,8 @@ func Discover(ctx context.Context, renewal, timeout time.Duration) []nat.Device 
 	conn, err := (&net.Dialer{}).DialContext(timeoutCtx, "udp", net.JoinHostPort(ip.String(), "5351"))
 	if err == nil {
 		conn.Close()
-		localIPAddress, _, err := net.SplitHostPort(conn.LocalAddr().String())
-		if err == nil {
-			localIP = net.ParseIP(localIPAddress)
-		} else {
+		localIP, err = osutil.IPFromAddr(conn.LocalAddr())
+		if localIP == nil {
 			l.Debugln("Failed to lookup local IP", err)
 		}
 	}
@@ -97,7 +96,7 @@ func (w *wrapper) GetLocalIPAddress() net.IP {
 	return w.localIP
 }
 
-func (w *wrapper) AddPortMapping(ctx context.Context, protocol nat.Protocol, internalPort, externalPort int, description string, duration time.Duration) (int, error) {
+func (w *wrapper) AddPortMapping(ctx context.Context, protocol nat.Protocol, internalPort, externalPort int, _ string, duration time.Duration) (int, error) {
 	// NAT-PMP says that if duration is 0, the mapping is actually removed
 	// Swap the zero with the renewal value, which should make the lease for the
 	// exact amount of time between the calls.
@@ -105,7 +104,7 @@ func (w *wrapper) AddPortMapping(ctx context.Context, protocol nat.Protocol, int
 		duration = w.renewal
 	}
 	var result *natpmp.AddPortMappingResult
-	err := util.CallWithContext(ctx, func() error {
+	err := svcutil.CallWithContext(ctx, func() error {
 		var err error
 		result, err = w.client.AddPortMapping(strings.ToLower(string(protocol)), internalPort, externalPort, int(duration/time.Second))
 		return err
@@ -119,7 +118,7 @@ func (w *wrapper) AddPortMapping(ctx context.Context, protocol nat.Protocol, int
 
 func (w *wrapper) GetExternalIPAddress(ctx context.Context) (net.IP, error) {
 	var result *natpmp.GetExternalAddressResult
-	err := util.CallWithContext(ctx, func() error {
+	err := svcutil.CallWithContext(ctx, func() error {
 		var err error
 		result, err = w.client.GetExternalAddress()
 		return err

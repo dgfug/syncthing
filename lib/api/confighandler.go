@@ -9,15 +9,13 @@ package api
 import (
 	"encoding/json"
 	"io"
-	"io/ioutil"
 	"net/http"
 
 	"github.com/julienschmidt/httprouter"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/syncthing/syncthing/lib/config"
 	"github.com/syncthing/syncthing/lib/protocol"
-	"github.com/syncthing/syncthing/lib/util"
+	"github.com/syncthing/syncthing/lib/structutil"
 )
 
 type configMuxBuilder struct {
@@ -65,6 +63,10 @@ func (c *configMuxBuilder) registerFolders(path string) {
 
 	c.HandlerFunc(http.MethodPut, path, func(w http.ResponseWriter, r *http.Request) {
 		data, err := unmarshalToRawMessages(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		folders := make([]config.FolderConfiguration, len(data))
 		defaultFolder := c.cfg.DefaultFolder()
 		for i, bs := range data {
@@ -96,6 +98,10 @@ func (c *configMuxBuilder) registerDevices(path string) {
 
 	c.HandlerFunc(http.MethodPut, path, func(w http.ResponseWriter, r *http.Request) {
 		data, err := unmarshalToRawMessages(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		devices := make([]config.DeviceConfiguration, len(data))
 		defaultDevice := c.cfg.DefaultDevice()
 		for i, bs := range data {
@@ -206,7 +212,7 @@ func (c *configMuxBuilder) registerDefaultFolder(path string) {
 
 	c.HandlerFunc(http.MethodPut, path, func(w http.ResponseWriter, r *http.Request) {
 		var cfg config.FolderConfiguration
-		util.SetDefaults(&cfg)
+		structutil.SetDefaults(&cfg)
 		c.adjustFolder(w, r, cfg, true)
 	})
 
@@ -222,12 +228,34 @@ func (c *configMuxBuilder) registerDefaultDevice(path string) {
 
 	c.HandlerFunc(http.MethodPut, path, func(w http.ResponseWriter, r *http.Request) {
 		var cfg config.DeviceConfiguration
-		util.SetDefaults(&cfg)
+		structutil.SetDefaults(&cfg)
 		c.adjustDevice(w, r, cfg, true)
 	})
 
 	c.HandlerFunc(http.MethodPatch, path, func(w http.ResponseWriter, r *http.Request) {
 		c.adjustDevice(w, r, c.cfg.DefaultDevice(), true)
+	})
+}
+
+func (c *configMuxBuilder) registerDefaultIgnores(path string) {
+	c.HandlerFunc(http.MethodGet, path, func(w http.ResponseWriter, _ *http.Request) {
+		sendJSON(w, c.cfg.DefaultIgnores())
+	})
+
+	c.HandlerFunc(http.MethodPut, path, func(w http.ResponseWriter, r *http.Request) {
+		var ignores config.Ignores
+		if err := unmarshalTo(r.Body, &ignores); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		waiter, err := c.cfg.Modify(func(cfg *config.Configuration) {
+			cfg.Defaults.Ignores = ignores
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		c.finish(w, waiter)
 	})
 }
 
@@ -238,7 +266,7 @@ func (c *configMuxBuilder) registerOptions(path string) {
 
 	c.HandlerFunc(http.MethodPut, path, func(w http.ResponseWriter, r *http.Request) {
 		var cfg config.OptionsConfiguration
-		util.SetDefaults(&cfg)
+		structutil.SetDefaults(&cfg)
 		c.adjustOptions(w, r, cfg)
 	})
 
@@ -254,7 +282,7 @@ func (c *configMuxBuilder) registerLDAP(path string) {
 
 	c.HandlerFunc(http.MethodPut, path, func(w http.ResponseWriter, r *http.Request) {
 		var cfg config.LDAPConfiguration
-		util.SetDefaults(&cfg)
+		structutil.SetDefaults(&cfg)
 		c.adjustLDAP(w, r, cfg)
 	})
 
@@ -270,7 +298,7 @@ func (c *configMuxBuilder) registerGUI(path string) {
 
 	c.HandlerFunc(http.MethodPut, path, func(w http.ResponseWriter, r *http.Request) {
 		var cfg config.GUIConfiguration
-		util.SetDefaults(&cfg)
+		structutil.SetDefaults(&cfg)
 		c.adjustGUI(w, r, cfg)
 	})
 
@@ -290,11 +318,13 @@ func (c *configMuxBuilder) adjustConfig(w http.ResponseWriter, r *http.Request) 
 	var errMsg string
 	var status int
 	waiter, err := c.cfg.Modify(func(cfg *config.Configuration) {
-		if to.GUI.Password, err = checkGUIPassword(cfg.GUI.Password, to.GUI.Password); err != nil {
-			l.Warnln("bcrypting password:", err)
-			errMsg = err.Error()
-			status = http.StatusInternalServerError
-			return
+		if to.GUI.Password != cfg.GUI.Password {
+			if err := to.GUI.SetPassword(to.GUI.Password); err != nil {
+				l.Warnln("hashing password:", err)
+				errMsg = err.Error()
+				status = http.StatusInternalServerError
+				return
+			}
 		}
 		*cfg = to
 	})
@@ -370,11 +400,13 @@ func (c *configMuxBuilder) adjustGUI(w http.ResponseWriter, r *http.Request, gui
 	var errMsg string
 	var status int
 	waiter, err := c.cfg.Modify(func(cfg *config.Configuration) {
-		if gui.Password, err = checkGUIPassword(oldPassword, gui.Password); err != nil {
-			l.Warnln("bcrypting password:", err)
-			errMsg = err.Error()
-			status = http.StatusInternalServerError
-			return
+		if gui.Password != oldPassword {
+			if err := gui.SetPassword(gui.Password); err != nil {
+				l.Warnln("hashing password:", err)
+				errMsg = err.Error()
+				status = http.StatusInternalServerError
+				return
+			}
 		}
 		cfg.GUI = gui
 	})
@@ -404,7 +436,7 @@ func (c *configMuxBuilder) adjustLDAP(w http.ResponseWriter, r *http.Request, ld
 
 // Unmarshals the content of the given body and stores it in to (i.e. to must be a pointer).
 func unmarshalTo(body io.ReadCloser, to interface{}) error {
-	bs, err := ioutil.ReadAll(body)
+	bs, err := io.ReadAll(body)
 	body.Close()
 	if err != nil {
 		return err
@@ -416,14 +448,6 @@ func unmarshalToRawMessages(body io.ReadCloser) ([]json.RawMessage, error) {
 	var data []json.RawMessage
 	err := unmarshalTo(body, &data)
 	return data, err
-}
-
-func checkGUIPassword(oldPassword, newPassword string) (string, error) {
-	if newPassword == oldPassword {
-		return newPassword, nil
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), 0)
-	return string(hash), err
 }
 
 func (c *configMuxBuilder) finish(w http.ResponseWriter, waiter config.Waiter) {

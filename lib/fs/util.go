@@ -10,9 +10,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"unicode"
+
+	"github.com/syncthing/syncthing/lib/build"
 )
 
 const pathSeparatorString = string(PathSeparator)
@@ -35,7 +36,7 @@ func ExpandTilde(path string) (string, error) {
 }
 
 func getHomeDir() (string, error) {
-	if runtime.GOOS == "windows" {
+	if build.IsWindows {
 		// Legacy -- we prioritize this for historical reasons, whereas
 		// os.UserHomeDir uses %USERPROFILE% always.
 		home := filepath.Join(os.Getenv("HomeDrive"), os.Getenv("HomePath"))
@@ -47,27 +48,23 @@ func getHomeDir() (string, error) {
 	return os.UserHomeDir()
 }
 
-var (
-	windowsDisallowedCharacters = string([]rune{
-		'<', '>', ':', '"', '|', '?', '*',
-		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
-		11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-		21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
-		31,
-	})
-	windowsDisallowedNames = []string{"CON", "PRN", "AUX", "NUL",
-		"COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-		"LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-	}
-)
+const windowsDisallowedCharacters = (`<>:"|?*` +
+	"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f" +
+	"\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f")
 
 func WindowsInvalidFilename(name string) error {
+	// The path must not contain any disallowed characters.
+	if idx := strings.IndexAny(name, windowsDisallowedCharacters); idx != -1 {
+		return fmt.Errorf("%w: %q", errInvalidFilenameWindowsReservedChar, name[idx:idx+1])
+	}
+
 	// None of the path components should end in space or period, or be a
-	// reserved name. COM0 and LPT0 are missing from the Microsoft docs,
-	// but Windows Explorer treats them as invalid too.
-	// (https://docs.microsoft.com/windows/win32/fileio/naming-a-file)
-	for _, part := range strings.Split(name, `\`) {
-		if len(part) == 0 {
+	// reserved name.
+	for len(name) > 0 {
+		part, rest, _ := strings.Cut(name, `\`)
+		name = rest
+
+		if part == "" {
 			continue
 		}
 		switch part[len(part)-1] {
@@ -75,14 +72,9 @@ func WindowsInvalidFilename(name string) error {
 			// Names ending in space or period are not valid.
 			return errInvalidFilenameWindowsSpacePeriod
 		}
-		if windowsIsReserved(part) {
-			return errInvalidFilenameWindowsReservedName
+		if reserved := windowsReservedNamePart(part); reserved != "" {
+			return fmt.Errorf("%w: %q", errInvalidFilenameWindowsReservedName, reserved)
 		}
-	}
-
-	// The path must not contain any disallowed characters
-	if strings.ContainsAny(name, windowsDisallowedCharacters) {
-		return errInvalidFilenameWindowsReservedChar
 	}
 
 	return nil
@@ -110,7 +102,7 @@ func WindowsInvalidFilename(name string) error {
 func SanitizePath(path string) string {
 	var b strings.Builder
 
-	disallowed := `<>:"'/\|?*[]{};:!@$%&^#` + windowsDisallowedCharacters
+	const disallowed = `'/\[]{};:!@$%&^#` + windowsDisallowedCharacters
 	prev := ' '
 	for _, c := range path {
 		if !unicode.IsPrint(c) || c == unicode.ReplacementChar ||
@@ -125,24 +117,36 @@ func SanitizePath(path string) string {
 	}
 
 	path = strings.TrimSpace(b.String())
-	if windowsIsReserved(path) {
+	if reserved := windowsReservedNamePart(path); reserved != "" {
 		path = "-" + path
 	}
 	return path
 }
 
-func windowsIsReserved(part string) bool {
-	upperCased := strings.ToUpper(part)
-	for _, disallowed := range windowsDisallowedNames {
-		if upperCased == disallowed {
-			return true
-		}
-		if strings.HasPrefix(upperCased, disallowed+".") {
-			// nul.txt.jpg is also disallowed
-			return true
-		}
+func windowsReservedNamePart(part string) string {
+	// nul.txt.jpg is also disallowed.
+	dot := strings.IndexByte(part, '.')
+	if dot != -1 {
+		part = part[:dot]
 	}
-	return false
+
+	// Check length to skip allocating ToUpper.
+	if len(part) != 3 && len(part) != 4 {
+		return ""
+	}
+
+	// COM0 and LPT0 are missing from the Microsoft docs,
+	// but Windows Explorer treats them as invalid too.
+	// (https://docs.microsoft.com/windows/win32/fileio/naming-a-file)
+	switch strings.ToUpper(part) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM0", "COM1", "COM2", "COM3", "COM4",
+		"COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT0", "LPT1", "LPT2", "LPT3", "LPT4",
+		"LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return part
+	}
+	return ""
 }
 
 // IsParent compares paths purely lexicographically, meaning it returns false
@@ -196,7 +200,7 @@ func CommonPrefix(first, second string) string {
 	}
 
 	if isAbs {
-		if runtime.GOOS == "windows" && isVolumeNameOnly(common) {
+		if build.IsWindows && isVolumeNameOnly(common) {
 			// Because strings.Split strips out path separators, if we're at the volume name, we end up without a separator
 			// Wedge an empty element to be joined with.
 			common = append(common, "")

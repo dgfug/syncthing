@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"github.com/syncthing/syncthing/lib/config"
+	"github.com/syncthing/syncthing/lib/connections/registry"
 	"github.com/syncthing/syncthing/lib/nat"
+	"github.com/syncthing/syncthing/lib/osutil"
 	"github.com/syncthing/syncthing/lib/protocol"
 	"github.com/syncthing/syncthing/lib/stats"
 
@@ -37,8 +39,10 @@ type tlsConn interface {
 type internalConn struct {
 	tlsConn
 	connType      connType
+	isLocal       bool
 	priority      int
 	establishedAt time.Time
+	connectionID  string // set after Hello exchange
 }
 
 type connType int
@@ -84,12 +88,14 @@ func (t connType) Transport() string {
 	}
 }
 
-func newInternalConn(tc tlsConn, connType connType, priority int) internalConn {
+func newInternalConn(tc tlsConn, connType connType, isLocal bool, priority int) internalConn {
+	now := time.Now()
 	return internalConn{
 		tlsConn:       tc,
 		connType:      connType,
+		isLocal:       isLocal,
 		priority:      priority,
-		establishedAt: time.Now().Truncate(time.Second),
+		establishedAt: now.Truncate(time.Second),
 	}
 }
 
@@ -105,6 +111,10 @@ func (c internalConn) Type() string {
 	return c.connType.String()
 }
 
+func (c internalConn) IsLocal() bool {
+	return c.isLocal
+}
+
 func (c internalConn) Priority() int {
 	return c.priority
 }
@@ -116,12 +126,8 @@ func (c internalConn) Crypto() string {
 
 func (c internalConn) Transport() string {
 	transport := c.connType.Transport()
-	host, _, err := net.SplitHostPort(c.LocalAddr().String())
+	ip, err := osutil.IPFromAddr(c.RemoteAddr())
 	if err != nil {
-		return transport
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
 		return transport
 	}
 	if ip.To4() != nil {
@@ -134,13 +140,20 @@ func (c internalConn) EstablishedAt() time.Time {
 	return c.establishedAt
 }
 
+func (c internalConn) ConnectionID() string {
+	return c.connectionID
+}
+
 func (c internalConn) String() string {
-	return fmt.Sprintf("%s-%s/%s/%s", c.LocalAddr(), c.RemoteAddr(), c.Type(), c.Crypto())
+	t := "WAN"
+	if c.isLocal {
+		t = "LAN"
+	}
+	return fmt.Sprintf("%s-%s/%s/%s/%s-P%d-%s", c.LocalAddr(), c.RemoteAddr(), c.Type(), c.Crypto(), t, c.Priority(), c.connectionID)
 }
 
 type dialerFactory interface {
-	New(config.OptionsConfiguration, *tls.Config) genericDialer
-	Priority() int
+	New(config.OptionsConfiguration, *tls.Config, *registry.Registry, *lanChecker) genericDialer
 	AlwaysWAN() bool
 	Valid(config.Configuration) error
 	String() string
@@ -150,19 +163,36 @@ type commonDialer struct {
 	trafficClass      int
 	reconnectInterval time.Duration
 	tlsCfg            *tls.Config
+	lanChecker        *lanChecker
+	lanPriority       int
+	wanPriority       int
+	allowsMultiConns  bool
 }
 
 func (d *commonDialer) RedialFrequency() time.Duration {
 	return d.reconnectInterval
 }
 
+func (d *commonDialer) Priority(host string) int {
+	if d.lanChecker.isLANHost(host) {
+		return d.lanPriority
+	}
+	return d.wanPriority
+}
+
+func (d *commonDialer) AllowsMultiConns() bool {
+	return d.allowsMultiConns
+}
+
 type genericDialer interface {
 	Dial(context.Context, protocol.DeviceID, *url.URL) (internalConn, error)
 	RedialFrequency() time.Duration
+	Priority(host string) int
+	AllowsMultiConns() bool
 }
 
 type listenerFactory interface {
-	New(*url.URL, config.Wrapper, *tls.Config, chan internalConn, *nat.Service) genericListener
+	New(*url.URL, config.Wrapper, *tls.Config, chan internalConn, *nat.Service, *registry.Registry, *lanChecker) genericListener
 	Valid(config.Configuration) error
 }
 
@@ -194,10 +224,7 @@ type genericListener interface {
 type Model interface {
 	protocol.Model
 	AddConnection(conn protocol.Connection, hello protocol.Hello)
-	NumConnections() int
-	Connection(remoteID protocol.DeviceID) (protocol.Connection, bool)
 	OnHello(protocol.DeviceID, net.Addr, protocol.Hello) error
-	GetHello(protocol.DeviceID) protocol.HelloIntf
 	DeviceStatistics() (map[protocol.DeviceID]stats.DeviceStatistics, error)
 }
 
